@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<title>💰 תקציב משפחתי</title>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<!-- Firebase -->
+<script type="module" id="fb-init">
+  // ─── FIREBASE CONFIG ─── הכנס כאן את פרטי Firebase שלך ───
+  // אם עוד לא הגדרת Firebase, האפליקציה תעבוד עם localStorage בינתיים
+  window.FIREBASE_CONFIG = {
+    apiKey: "AIzaSyB4zkxVi7g6xV__E3T3PtAOltMvOoQuiDY",
+    authDomain: "karavani-5ef1c.firebaseapp.com",
+    databaseURL: "https://karavani-5ef1c-default-rtdb.firebaseio.com",
+    projectId: "karavani-5ef1c",
+    storageBucket: "karavani-5ef1c.firebasestorage.app",
+    messagingSenderId: "56317217053",
+    appId: "1:56317217053:web:1a0e73b1712b213bbbb9f4"
+  };
+</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body,#root{height:100%;overflow:hidden;}
+body{background:#080f1a;color:#e2e8f0;font-family:'Heebo',Arial,sans-serif;overscroll-behavior:none;}
+input,select,button{font-family:'Heebo',Arial,sans-serif;}
+::-webkit-scrollbar{width:3px;}
+::-webkit-scrollbar-thumb{background:#ffffff18;border-radius:4px;}
+select option{background:#1e293b;color:#e2e8f0;}
+input[type=range]{-webkit-appearance:none;height:6px;border-radius:99px;outline:none;cursor:pointer;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;cursor:pointer;border:2px solid #080f1a;}
+@keyframes fi{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+@keyframes sl{from{opacity:0;transform:translateX(-10px);}to{opacity:1;transform:translateX(0);}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.fi{animation:fi .28s ease forwards}
+.sl{animation:sl .22s ease forwards}
+.pulse{animation:pulse 1.5s infinite}
+.spin{animation:spin .8s linear infinite;display:inline-block}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useCallback,useRef,useMemo}=React;
+
+/* ══════════════════════════════════════════
+   FIREBASE / STORAGE LAYER
+   ══════════════════════════════════════════ */
+let firebaseDB = null;
+let firebaseRef = null;
+let firebaseSet = null;
+let firebaseOnValue = null;
+let firebaseOff = null;
+let usingFirebase = false;
+
+async function initFirebase(config){
+  if(!config.apiKey) return false;
+  try{
+    const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+    const { getDatabase, ref, set, onValue, off } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
+    const app = initializeApp(config);
+    firebaseDB = getDatabase(app);
+    firebaseRef = (path) => ref(firebaseDB, path);
+    firebaseSet = set;
+    firebaseOnValue = onValue;
+    firebaseOff = off;
+    usingFirebase = true;
+    return true;
+  }catch(e){
+    console.warn("Firebase init failed, using localStorage", e);
+    return false;
+  }
+}
+
+const LS_KEY = "bgt_v4";
+const lsSave = d => { try{ localStorage.setItem(LS_KEY, JSON.stringify(d)); }catch{} };
+const lsLoad = () => { try{ const d=localStorage.getItem(LS_KEY); return d?JSON.parse(d):null; }catch{ return null; } };
+
+/* ══════════════════════════════════════════
+   CONSTANTS
+   ══════════════════════════════════════════ */
+const DEFAULT_CATS = [
+  {key:"regular",     label:"צריכה שוטפת",     pct:47, color:"#6366f1", icon:"🏠"},
+  {key:"entertainment",label:"בילויים וכיף",   pct:5,  color:"#ec4899", icon:"🎉"},
+  {key:"shopping",    label:"שופינג",            pct:0,  color:"#f59e0b", icon:"🛍️"},
+  {key:"education",   label:"התפתחות והשכלה",  pct:4,  color:"#10b981", icon:"📚"},
+  {key:"maaser",      label:"מעשר",              pct:10, color:"#8b5cf6", icon:"🤝"},
+  {key:"savings",     label:"חיסכון והשקעות",  pct:34, color:"#0ea5e9", icon:"💰"},
+];
+
+const USERS = [
+  {id:"user1", name:"אני",        color:"#6366f1", avatar:"👤"},
+  {id:"user2", name:"בת הזוג",    color:"#ec4899", avatar:"👤"},
+  {id:"user3", name:"משתמש 3",   color:"#10b981", avatar:"👤"},
+];
+
+const mkBudgets = (cats,income,carryover=0) => {
+  const base = (income||0)+(carryover||0);
+  return Object.fromEntries(cats.map(c=>[c.key, Math.round(base*c.pct/100)]));
+};
+const mkExp = cats => Object.fromEntries(cats.map(c=>[c.key,0]));
+
+const INIT_DATA = {
+  cats: DEFAULT_CATS,
+  assets: {mom:130000,longTermStocks:90926,monetaryFund:300559,emergencyFund:52869,trip:2551,doron:2299},
+  months: [
+    {id:1,name:"חודש 1",totalIncome:22200,carryover:0,
+     budgets:{regular:7548,entertainment:888,shopping:2220,education:1110,maaser:0,savings:10434},
+     expenses:{regular:7548,entertainment:782,shopping:2220,education:810,maaser:0,savings:8613},
+     items:[
+       {id:1,cat:"regular",desc:'שכ"ד',amount:4300,by:"user1"},
+       {id:2,cat:"regular",desc:"חשמל",amount:420,by:"user1"},
+       {id:3,cat:"regular",desc:"טלוויזיה",amount:600,by:"user2"},
+       {id:4,cat:"regular",desc:"נאי",amount:1800,by:"user1"},
+       {id:5,cat:"savings",desc:"חיסכון",amount:1500,by:"user1"},
+       {id:6,cat:"education",desc:"ספר",amount:214,by:"user2"},
+       {id:7,cat:"entertainment",desc:"פיצה",amount:176,by:"user2"},
+       {id:8,cat:"entertainment",desc:"קראפט",amount:70,by:"user1"},
+       {id:9,cat:"shopping",desc:"מקסטוק",amount:60,by:"user2"},
+       {id:10,cat:"shopping",desc:"יוחננוף",amount:340,by:"user2"},
+       {id:11,cat:"shopping",desc:"קארפור",amount:103,by:"user1"},
+       {id:12,cat:"shopping",desc:"שיין",amount:500,by:"user2"},
+       {id:13,cat:"shopping",desc:"סופר",amount:100,by:"user1"},
+       {id:14,cat:"shopping",desc:"גרפוס",amount:160,by:"user1"},
+       {id:15,cat:"regular",desc:"תספורת",amount:150,by:"user1"},
+     ]},
+    {id:2,name:"חודש 2",totalIncome:19225,carryover:0,
+     budgets:{regular:6536,entertainment:769,shopping:1922,education:961,maaser:0,savings:9035},
+     expenses:{regular:6536,entertainment:0,shopping:374,education:370,maaser:0,savings:11736},
+     items:[
+       {id:1,cat:"regular",desc:"מגפיים",amount:200,by:"user2"},
+       {id:2,cat:"regular",desc:"אורבניקה",amount:72,by:"user2"},
+       {id:3,cat:"regular",desc:"רנואר",amount:102,by:"user1"},
+       {id:4,cat:"savings",desc:"טלוויזיה",amount:200,by:"user1"},
+       {id:5,cat:"shopping",desc:"מקס סטוק",amount:60,by:"user2"},
+       {id:6,cat:"shopping",desc:"סופר ויקטורי",amount:110,by:"user1"},
+       {id:7,cat:"education",desc:"משלוחי מנות",amount:200,by:"user2"},
+     ]},
+  ],
+};
+
+/* ══════════════════════════════════════════
+   HELPERS / SHARED UI
+   ══════════════════════════════════════════ */
+const fmt = n => new Intl.NumberFormat("he-IL",{style:"currency",currency:"ILS",maximumFractionDigits:0}).format(n||0);
+
+const S = {
+  inp: {background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:12,padding:"9px 12px",color:"#e2e8f0",outline:"none",fontSize:14,textAlign:"right",width:"100%",fontFamily:"Heebo,Arial,sans-serif"},
+  card: (ex={}) => ({borderRadius:18,padding:14,background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",...ex}),
+  btn: (a,c="#6366f1",ex={}) => ({padding:"10px 0",borderRadius:12,border:"none",cursor:"pointer",fontSize:13,fontWeight:500,fontFamily:"Heebo,Arial,sans-serif",transition:"all 0.2s",background:a?c:"rgba(255,255,255,0.07)",color:a?"#fff":"rgba(255,255,255,0.5)",...ex}),
+};
+
+function EC({value,onSave,type="text",style={}}){
+  const[ed,setEd]=useState(false);
+  const[v,setV]=useState(value);
+  useEffect(()=>{if(!ed)setV(value);},[value,ed]);
+  const commit=()=>{onSave(type==="number"?parseFloat(v)||0:v);setEd(false);};
+  if(ed)return<input autoFocus type={type} value={v} onChange={e=>setV(e.target.value)} onBlur={commit} onKeyDown={e=>e.key==="Enter"&&commit()} style={{...S.inp,display:"inline-block",width:type==="number"?"100px":"100%",...style}}/>;
+  return<span onClick={()=>{setV(value);setEd(true);}} style={{cursor:"pointer",borderRadius:6,padding:"2px 4px",display:"inline-block",...style}}>{type==="number"?fmt(value):value}</span>;
+}
+
+function Ring({pct,color,size=68}){
+  const r=size/2-7,circ=2*Math.PI*r,dash=Math.min(pct/100,1)*circ;
+  return<svg width={size} height={size} style={{transform:"rotate(-90deg)",flexShrink:0}}><circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#ffffff10" strokeWidth={6}/><circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={6} strokeDasharray={`${dash} ${circ}`} strokeLinecap="round" style={{transition:"stroke-dasharray .6s ease"}}/></svg>;
+}
+
+function UserBadge({userId,small}){
+  const u=USERS.find(u=>u.id===userId)||USERS[0];
+  return<span style={{fontSize:small?10:11,padding:small?"1px 5px":"2px 7px",borderRadius:99,background:`${u.color}22`,color:u.color,border:`1px solid ${u.color}44`,flexShrink:0}}>{u.name}</span>;
+}
+
+/* ══════════════════════════════════════════
+   LOGIN SCREEN
+   ══════════════════════════════════════════ */
+function LoginScreen({onLogin}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",padding:24,gap:20}} className="fi">
+      <div style={{fontSize:48}}>💰</div>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:26,fontWeight:900,marginBottom:6}}>תקציב משפחתי</div>
+        <div style={{fontSize:14,opacity:0.5}}>בחר/י את המשתמש שלך</div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:10,width:"100%",maxWidth:320}}>
+        {USERS.map(u=>(
+          <button key={u.id} onClick={()=>onLogin(u.id)}
+            style={{padding:"16px 20px",borderRadius:18,border:`2px solid ${u.color}44`,background:`${u.color}12`,cursor:"pointer",display:"flex",alignItems:"center",gap:14,transition:"all 0.2s",fontFamily:"Heebo,Arial,sans-serif"}}
+            onTouchStart={e=>e.currentTarget.style.transform="scale(0.97)"}
+            onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}>
+            <div style={{width:42,height:42,borderRadius:14,background:`${u.color}22`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,border:`1px solid ${u.color}33`}}>
+              {u.id==="user1"?"👨":u.id==="user2"?"👩":"👤"}
+            </div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:16,fontWeight:700,color:u.color}}>{u.name}</div>
+              <div style={{fontSize:11,opacity:0.5}}>לחץ להיכנס</div>
+            </div>
+            <div style={{marginRight:"auto",opacity:0.3,fontSize:16}}>←</div>
+          </button>
+        ))}
+      </div>
+      <div style={{fontSize:11,opacity:0.3,textAlign:"center",marginTop:8}}>
+        כל המשתמשים רואים ועורכים את אותם הנתונים
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════
+   FIREBASE SETUP SCREEN
+   ══════════════════════════════════════════ */
+function FirebaseSetup({onSave,onSkip}){
+  const[cfg,setCfg]=useState({apiKey:"",databaseURL:"",projectId:"",appId:""});
+  const f=(k,v)=>setCfg(c=>({...c,[k]:v}));
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"100%",padding:16,gap:12,overflowY:"auto"}} className="fi">
+      <div style={{textAlign:"center",padding:"12px 0"}}>
+        <div style={{fontSize:32,marginBottom:8}}>🔥</div>
+        <div style={{fontSize:19,fontWeight:800}}>חיבור Firebase</div>
+        <div style={{fontSize:12,opacity:0.5,marginTop:4}}>לסנכרון בין שני הטלפונים</div>
+      </div>
+      <div style={S.card({background:"rgba(252,211,77,0.06)",border:"1px solid rgba(252,211,77,0.2)",padding:12})}>
+        <div style={{fontSize:12,color:"#fcd34d",lineHeight:1.7}}>
+          <b>הוראות הגדרה (3 דקות):</b><br/>
+          1. כנס ל־<b>console.firebase.google.com</b><br/>
+          2. צור פרויקט חדש → המשך<br/>
+          3. לחץ "הוסף Web App" (&lt;/&gt;)<br/>
+          4. העתק את פרטי ה-config<br/>
+          5. בצד שמאל: <b>Realtime Database</b> → צור DB → בחר "Start in test mode"<br/>
+          6. העתק את ה-databaseURL (מסתיים ב-.firebaseio.com)
+        </div>
+      </div>
+      {[["apiKey","API Key","AIzaSy..."],["databaseURL","Database URL","https://...firebaseio.com"],["projectId","Project ID","my-budget-app"],["appId","App ID","1:123:web:abc"]].map(([k,l,ph])=>(
+        <div key={k}>
+          <div style={{fontSize:11,opacity:0.5,marginBottom:4}}>{l}</div>
+          <input value={cfg[k]} onChange={e=>f(k,e.target.value)} placeholder={ph} style={S.inp}/>
+        </div>
+      ))}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:4}}>
+        <button onClick={()=>onSave(cfg)} style={{...S.btn(true,"#f59e0b"),padding:"13px 0",fontSize:14}}>💾 שמור וחבר</button>
+        <button onClick={onSkip} style={{...S.btn(false),padding:"13px 0",fontSize:14}}>דלג (מקומי)</button>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════
+   CATEGORY DETAIL
+   ══════════════════════════════════════════ */
+function CatDetail({cat,month,currentUser,onUpdate,onBack}){
+  const[showAdd,setShowAdd]=useState(false);
+  const[ni,setNi]=useState({desc:"",amount:""});
+  const items=month.items.filter(i=>i.cat===cat.key);
+  const spent=items.reduce((a,i)=>a+i.amount,0);
+  const budget=month.budgets[cat.key]||0;
+  const pct=budget>0?Math.min((spent/budget)*100,100):0;
+  const left=budget-spent;
+
+  const addItem=()=>{
+    if(!ni.desc||!ni.amount)return;
+    const item={id:Date.now(),cat:cat.key,desc:ni.desc,amount:parseFloat(ni.amount)||0,by:currentUser};
+    onUpdate({...month,
+      items:[...month.items,item],
+      expenses:{...month.expenses,[cat.key]:(month.expenses[cat.key]||0)+item.amount}
+    });
+    setNi({desc:"",amount:""});setShowAdd(false);
+  };
+  const delItem=item=>onUpdate({...month,
+    items:month.items.filter(i=>i.id!==item.id),
+    expenses:{...month.expenses,[cat.key]:Math.max(0,(month.expenses[cat.key]||0)-item.amount)}
+  });
+  const updItem=(item,field,val)=>{
+    const newItems=month.items.map(i=>i.id===item.id?{...i,[field]:field==="amount"?parseFloat(val)||0:val}:i);
+    const newSpent=newItems.filter(i=>i.cat===cat.key).reduce((a,i)=>a+i.amount,0);
+    onUpdate({...month,items:newItems,expenses:{...month.expenses,[cat.key]:newSpent}});
+  };
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}} className="sl">
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexShrink:0}}>
+        <button onClick={onBack} style={{...S.btn(false),width:38,height:38,padding:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>←</button>
+        <span style={{fontSize:22}}>{cat.icon}</span>
+        <div style={{flex:1}}>
+          <div style={{fontSize:17,fontWeight:700}}>{cat.label}</div>
+          <div style={{fontSize:11,opacity:0.45}}>{month.name}</div>
+        </div>
+      </div>
+
+      <div style={S.card({background:`${cat.color}10`,border:`1px solid ${cat.color}2a`,marginBottom:10,flexShrink:0})}>
+        <div style={{display:"flex",gap:12,alignItems:"center"}}>
+          <div style={{position:"relative",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            <Ring pct={pct} color={pct>100?"#ef4444":cat.color}/>
+            <span style={{position:"absolute",fontSize:11,fontWeight:700}}>{Math.round(pct)}%</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,flex:1}}>
+            {[["תקציב",fmt(budget),cat.color],["הוצאתי",fmt(spent),"#f87171"],["נותר",fmt(left),left>=0?"#6ee7b7":"#f87171"],["פריטים",items.length,"#e2e8f0"]].map(([l,v,c])=>(
+              <div key={l}><div style={{fontSize:9,opacity:0.5}}>{l}</div><div style={{fontSize:13,fontWeight:700,color:c}}>{v}</div></div>
+            ))}
+          </div>
+        </div>
+        <div style={{height:4,borderRadius:99,background:"rgba(255,255,255,0.07)",marginTop:10,overflow:"hidden"}}>
+          <div style={{height:"100%",borderRadius:99,width:`${pct}%`,background:pct>100?"#ef4444":cat.color,transition:"width .7s"}}/>
+        </div>
+      </div>
+
+      <div style={{overflowY:"auto",flex:1,display:"flex",flexDirection:"column",gap:7}}>
+        {items.length===0&&!showAdd&&(
+          <div style={{textAlign:"center",padding:"36px 0",opacity:0.35,fontSize:13}}>
+            <div style={{fontSize:32,marginBottom:8}}>{cat.icon}</div>אין עדיין הוצאות בקטגוריה זו
+          </div>
+        )}
+        {items.map(item=>(
+          <div key={item.id} style={{display:"flex",alignItems:"center",gap:9,borderRadius:14,padding:"10px 12px",background:"rgba(255,255,255,0.04)",border:`1px solid ${cat.color}1a`}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                <EC value={item.desc} onSave={v=>updItem(item,"desc",v)} style={{fontSize:14,fontWeight:500}}/>
+                {item.by&&<UserBadge userId={item.by} small/>}
+              </div>
+            </div>
+            <EC value={item.amount} type="number" onSave={v=>updItem(item,"amount",v)} style={{fontSize:14,fontWeight:700,color:cat.color}}/>
+            <button onClick={()=>delItem(item)} style={{width:27,height:27,borderRadius:8,border:"none",cursor:"pointer",background:"rgba(239,68,68,0.14)",color:"#f87171",fontSize:11,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+          </div>
+        ))}
+        {showAdd?(
+          <div style={S.card({background:"rgba(99,102,241,0.09)",border:"1px solid rgba(99,102,241,0.28)",display:"flex",flexDirection:"column",gap:8})}>
+            <input value={ni.desc} onChange={e=>setNi({...ni,desc:e.target.value})} placeholder="תיאור ההוצאה" style={S.inp} autoFocus/>
+            <input type="number" value={ni.amount} onChange={e=>setNi({...ni,amount:e.target.value})} placeholder="סכום בש״ח" style={S.inp} onKeyDown={e=>e.key==="Enter"&&addItem()}/>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <button onClick={addItem} style={{...S.btn(true),padding:"11px 0"}}>✓ הוסף</button>
+              <button onClick={()=>setShowAdd(false)} style={{...S.btn(false),padding:"11px 0"}}>ביטול</button>
+            </div>
+          </div>
+        ):(
+          <button onClick={()=>setShowAdd(true)} style={{padding:"15px 0",borderRadius:16,border:`2px dashed ${cat.color}44`,background:`${cat.color}07`,color:cat.color,fontSize:13,cursor:"pointer",fontFamily:"Heebo,Arial,sans-serif",marginTop:2}}>
+            + הוסף הוצאה ל{cat.label}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════
+   MONTH DETAIL
+   ══════════════════════════════════════════ */
+function MonthDetail({month,cats,currentUser,onUpdate,onBack}){
+  const[view,setView]=useState("overview");
+  const[tab,setTab]=useState("cats");
+  const selCat=cats.find(c=>c.key===view);
+  const base=(month.totalIncome||0)+(month.carryover||0);
+  const totalSpent=Object.values(month.expenses).reduce((a,b)=>a+b,0);
+  const usedPct=base>0?(totalSpent/base)*100:0;
+  const left=base-totalSpent;
+
+  const recalc=(m)=>{
+    const b=(m.totalIncome||0)+(m.carryover||0);
+    return{...m,budgets:Object.fromEntries(cats.map(c=>[c.key,Math.round(b*c.pct/100)]))};
+  };
+
+  if(view!=="overview"&&selCat)
+    return<CatDetail cat={selCat} month={month} currentUser={currentUser} onUpdate={m=>{onUpdate(m);}} onBack={()=>setView("overview")}/>;
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}} className="fi">
+      {/* header */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexShrink:0}}>
+        <button onClick={onBack} style={{...S.btn(false),width:38,height:38,padding:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>←</button>
+        <div style={{flex:1,fontSize:17,fontWeight:700}}><EC value={month.name} onSave={v=>onUpdate({...month,name:v})}/></div>
+      </div>
+
+      {/* summary */}
+      <div style={S.card({background:"linear-gradient(135deg,#1e293b,#0f1f35)",marginBottom:8,display:"flex",gap:12,alignItems:"center",flexShrink:0})}>
+        <div style={{position:"relative",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          <Ring pct={usedPct} color={usedPct>90?"#ef4444":"#6366f1"}/>
+          <span style={{position:"absolute",fontSize:10,fontWeight:700}}>{Math.round(usedPct)}%</span>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,flex:1}}>
+          <div><div style={{fontSize:9,opacity:0.45}}>הכנסה חודשית</div><div style={{fontSize:12,fontWeight:700,color:"#a5b4fc"}}><EC value={month.totalIncome} type="number" onSave={v=>onUpdate(recalc({...month,totalIncome:v}))}/></div></div>
+          <div><div style={{fontSize:9,opacity:0.45}}>+ העברה מחודש קודם</div><div style={{fontSize:12,fontWeight:700,color:"#fcd34d"}}><EC value={month.carryover||0} type="number" onSave={v=>onUpdate(recalc({...month,carryover:v}))}/></div></div>
+          <div><div style={{fontSize:9,opacity:0.45}}>סה"כ לניהול</div><div style={{fontSize:12,fontWeight:700}}>{fmt(base)}</div></div>
+          <div><div style={{fontSize:9,opacity:0.45}}>נותר</div><div style={{fontSize:12,fontWeight:700,color:left>=0?"#6ee7b7":"#f87171"}}>{fmt(left)}</div></div>
+        </div>
+      </div>
+
+      {(month.carryover||0)>0&&(
+        <div style={{borderRadius:10,padding:"6px 10px",marginBottom:8,background:"rgba(252,211,77,0.07)",border:"1px solid rgba(252,211,77,0.2)",fontSize:11,color:"#fcd34d",display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+          <span>💡</span><span>העברה של {fmt(month.carryover)} מחודש קודם נוספה לתקציב</span>
+        </div>
+      )}
+
+      {/* tabs */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8,flexShrink:0}}>
+        {[["cats","קטגוריות"],["settings","% תקציב"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} style={S.btn(tab===k)}>{l}</button>
+        ))}
+      </div>
+
+      {/* categories tab */}
+      {tab==="cats"&&(
+        <div style={{overflowY:"auto",flex:1,display:"flex",flexDirection:"column",gap:7}}>
+          {cats.map(cat=>{
+            const budget=month.budgets[cat.key]||0;
+            const spent=month.expenses[cat.key]||0;
+            const pct=budget>0?Math.min((spent/budget)*100,100):0;
+            const over=spent>budget;
+            const itemCount=month.items.filter(i=>i.cat===cat.key).length;
+            return(
+              <div key={cat.key} onClick={()=>setView(cat.key)}
+                style={S.card({border:`1px solid ${cat.color}2e`,cursor:"pointer",transition:"all .15s"})}
+                onTouchStart={e=>e.currentTarget.style.background="rgba(255,255,255,0.07)"}
+                onTouchEnd={e=>e.currentTarget.style.background="rgba(255,255,255,0.04)"}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                  <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                    <span style={{fontSize:18}}>{cat.icon}</span>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600}}>{cat.label}</div>
+                      <div style={{fontSize:10,opacity:0.4}}>{itemCount} פריטים · {cat.pct}%</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <div style={{textAlign:"left"}}>
+                      <div style={{fontSize:13,fontWeight:700,color:over?"#f87171":"#6ee7b7"}}>{fmt(spent)}</div>
+                      <div style={{fontSize:9,opacity:0.45}}>מתוך {fmt(budget)}</div>
+                    </div>
+                    <span style={{opacity:0.25}}>←</span>
+                  </div>
+                </div>
+                <div style={{height:4,borderRadius:99,background:"rgba(255,255,255,0.07)",overflow:"hidden"}}>
+                  <div style={{height:"100%",borderRadius:99,width:`${pct}%`,background:over?"#ef4444":cat.color,transition:"width .7s"}}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* settings / % tab */}
+      {tab==="settings"&&(
+        <div style={{overflowY:"auto",flex:1,display:"flex",flexDirection:"column",gap:9}}>
+          <div style={S.card({fontSize:11,opacity:0.55,lineHeight:1.7,padding:12})}>
+            גרור את הסליידר לשנות את אחוז התקציב לכל קטגוריה. הסכומים מחושבים אוטומטית.
+          </div>
+          {cats.map(cat=>(
+            <div key={cat.key} style={S.card({border:`1px solid ${cat.color}1a`})}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <span>{cat.icon}</span><span style={{fontSize:13,fontWeight:600}}>{cat.label}</span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:20,fontWeight:900,color:cat.color}}>{cat.pct}%</span>
+                  <span style={{fontSize:11,opacity:0.45}}>{fmt(month.budgets[cat.key]||0)}</span>
+                </div>
+              </div>
+              <input type="range" min="0" max="80" value={cat.pct}
+                style={{width:"100%",background:`linear-gradient(to left,${cat.color} ${cat.pct*100/80}%,rgba(255,255,255,0.1) ${cat.pct*100/80}%)`}}
+                onChange={e=>{
+                  const np=parseInt(e.target.value);
+                  const newCats=cats.map(c=>c.key===cat.key?{...c,pct:np}:c);
+                  const b=(month.totalIncome||0)+(month.carryover||0);
+                  const nb=Object.fromEntries(newCats.map(c=>[c.key,Math.round(b*c.pct/100)]));
+                  onUpdate({...month,budgets:nb,_catsUpdate:newCats});
+                }}/>
+              <style>{`input[type=range]::-webkit-slider-thumb{background:${cat.color}}`}</style>
+            </div>
+          ))}
+          <div style={S.card({padding:12,background:"rgba(255,255,255,0.02)"})}>
+            {[["סה\"כ אחוזים",`${cats.reduce((a,c)=>a+c.pct,0)}%`,cats.reduce((a,c)=>a+c.pct,0)>100?"#f87171":"#6ee7b7"],
+              ["לא מוקצה",fmt(base-cats.reduce((a,c)=>a+(month.budgets[c.key]||0),0)),"#fcd34d"]].map(([l,v,c])=>(
+              <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:12}}>
+                <span style={{opacity:0.55}}>{l}</span>
+                <span style={{fontWeight:700,color:c}}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════
+   ASSETS VIEW
+   ══════════════════════════════════════════ */
+function AssetsView({assets,onUpdate}){
+  const total=Object.values(assets).reduce((a,b)=>a+b,0);
+  const items=[
+    {key:"mom",label:"אמא",color:"#6366f1",icon:"👩"},{key:"longTermStocks",label:"מניות",color:"#10b981",icon:"📈"},
+    {key:"monetaryFund",label:"קרן כספית",color:"#0ea5e9",icon:"🏦"},{key:"emergencyFund",label:"קרן חירום",color:"#f59e0b",icon:"🛡️"},
+    {key:"trip",label:"טיול",color:"#ec4899",icon:"✈️"},{key:"doron",label:"דורון K130",color:"#8b5cf6",icon:"💼"},
+  ];
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:12,overflowY:"auto",flex:1}} className="fi">
+      <div style={{borderRadius:22,padding:20,textAlign:"center",background:"linear-gradient(135deg,#6366f1,#8b5cf6)",boxShadow:"0 8px 28px rgba(99,102,241,0.28)"}}>
+        <div style={{fontSize:11,opacity:.85,marginBottom:4}}>סה"כ הון עצמי</div>
+        <div style={{fontSize:30,fontWeight:900}}>{fmt(total)}</div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+        {items.map(it=>(
+          <div key={it.key} style={{borderRadius:16,padding:13,background:`${it.color}12`,border:`1px solid ${it.color}2e`}}>
+            <div style={{fontSize:18,marginBottom:3}}>{it.icon}</div>
+            <div style={{fontSize:10,opacity:.55,marginBottom:3}}>{it.label}</div>
+            <div style={{fontSize:14,fontWeight:700}}><EC value={assets[it.key]} type="number" onSave={v=>onUpdate({...assets,[it.key]:v})}/></div>
+          </div>
+        ))}
+      </div>
+      <div style={S.card({padding:14})}>
+        <div style={{fontSize:12,opacity:.45,marginBottom:10}}>התפלגות נכסים</div>
+        {items.map(it=>{
+          const p=total>0?(assets[it.key]/total)*100:0;
+          return<div key={it.key} style={{marginBottom:9}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+              <span style={{opacity:.65}}>{it.label}</span><span style={{fontWeight:600,color:it.color}}>{Math.round(p)}%</span>
+            </div>
+            <div style={{height:4,borderRadius:99,background:"rgba(255,255,255,0.07)"}}>
+              <div style={{height:"100%",borderRadius:99,width:`${p}%`,background:it.color,transition:"width .8s"}}/>
+            </div>
+          </div>;
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════
+   STATS VIEW
+   ══════════════════════════════════════════ */
+function StatsView({data,cats}){
+  const ti=data.months.reduce((a,m)=>a+(m.totalIncome||0),0);
+  const tc=data.months.reduce((a,m)=>a+(m.carryover||0),0);
+  const ts=data.months.reduce((a,m)=>a+(m.expenses.savings||0),0);
+  const sp=ti>0?(ts/ti)*100:0;
+
+  // Per-user spending
+  const allItems=data.months.flatMap(m=>m.items);
+  const byUser=USERS.map(u=>({...u,total:allItems.filter(i=>i.by===u.id).reduce((a,i)=>a+i.amount,0)}));
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:12,overflowY:"auto",flex:1}} className="fi">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+        {[["💰","סה\"כ הכנסות",fmt(ti),"#a5b4fc"],["📥","העברות",fmt(tc),"#fcd34d"],["🏦","חיסכון",fmt(ts),"#6ee7b7"],["📊","% חיסכון",`${Math.round(sp)}%`,"#f9a8d4"]].map(([ic,l,v,c])=>(
+          <div key={l} style={S.card({textAlign:"center",padding:14})}>
+            <div style={{fontSize:20,marginBottom:3}}>{ic}</div>
+            <div style={{fontSize:9,opacity:.45,marginBottom:3}}>{l}</div>
+            <div style={{fontSize:16,fontWeight:700,color:c}}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* per-user */}
+      <div style={S.card({padding:14})}>
+        <div style={{fontSize:12,opacity:.45,marginBottom:10}}>הוצאות לפי משתמש</div>
+        {byUser.map(u=>(
+          <div key={u.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={{display:"flex",gap:7,alignItems:"center"}}>
+              <span style={{fontSize:16}}>{u.id==="user1"?"👨":u.id==="user2"?"👩":"👤"}</span>
+              <span style={{fontSize:13,color:u.color,fontWeight:600}}>{u.name}</span>
+            </div>
+            <span style={{fontSize:14,fontWeight:700}}>{fmt(u.total)}</span>
+          </div>
+        ))}
+      </div>
+
+      {cats.map(cat=>{
+        const tb=data.months.reduce((a,m)=>a+(m.budgets[cat.key]||0),0);
+        const ts2=data.months.reduce((a,m)=>a+(m.expenses[cat.key]||0),0);
+        const p=tb>0?Math.min((ts2/tb)*100,100):0;
+        return(
+          <div key={cat.key} style={S.card({border:`1px solid ${cat.color}1e`})}>
+            <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:8}}>
+              <span style={{fontSize:18}}>{cat.icon}</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:600}}>{cat.label}</div>
+                <div style={{fontSize:9,opacity:.4}}>תקציב: {fmt(tb)} | בפועל: {fmt(ts2)}</div>
+              </div>
+              <span style={{fontSize:12,fontWeight:700,color:ts2>tb?"#f87171":"#6ee7b7"}}>{Math.round(p)}%</span>
+            </div>
+            <div style={{height:4,borderRadius:99,background:"rgba(255,255,255,0.07)"}}>
+              <div style={{height:"100%",borderRadius:99,width:`${p}%`,background:cat.color,transition:"width .8s"}}/>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════
+   MAIN APP
+   ══════════════════════════════════════════ */
+function App(){
+  const[phase,setPhase]=useState("login"); // login | app | fbsetup
+  const[currentUser,setCurrentUser]=useState(null);
+  const[fbReady,setFbReady]=useState(false);
+  const[syncing,setSyncing]=useState(false);
+  const[onlineUsers,setOnlineUsers]=useState([]);
+  const[cats,setCats]=useState(DEFAULT_CATS);
+  const[data,setData]=useState(INIT_DATA);
+  const[nav,setNav]=useState("months");
+  const[sel,setSel]=useState(null);
+  const[saved,setSaved]=useState(false);
+  const fbListenerRef=useRef(null);
+
+  // Auto-connect Firebase from hardcoded config
+  useEffect(()=>{
+    const cfg=window.FIREBASE_CONFIG;
+    if(cfg&&cfg.apiKey){
+      initFirebase(cfg).then(ok=>{
+        if(ok)setFbReady(true);
+      });
+    }
+    const local=lsLoad();
+    if(local){
+      if(local.cats)setCats(local.cats);
+      setData({assets:local.assets||INIT_DATA.assets,months:local.months||INIT_DATA.months});
+    }
+  },[]);
+
+  // Firebase listener after login
+  useEffect(()=>{
+    if(!fbReady||!currentUser)return;
+    setSyncing(true);
+    const r=firebaseRef("budget");
+    firebaseOnValue(r,(snap)=>{
+      const d=snap.val();
+      if(d){
+        if(d.cats)setCats(d.cats);
+        setData({assets:d.assets||INIT_DATA.assets,months:d.months||INIT_DATA.months});
+      }
+      setSyncing(false);
+    });
+    fbListenerRef.current=r;
+    return()=>{if(fbListenerRef.current)firebaseOff(fbListenerRef.current);};
+  },[fbReady,currentUser]);
+
+  // Save whenever data changes
+  const saveData=useCallback((newData,newCats)=>{
+    lsSave({...newData,cats:newCats});
+    setSaved(true);
+    setTimeout(()=>setSaved(false),1800);
+    if(fbReady&&usingFirebase){
+      setSyncing(true);
+      firebaseSet(firebaseRef("budget"),{...newData,cats:newCats,lastUpdated:Date.now(),lastBy:currentUser})
+        .then(()=>setSyncing(false)).catch(()=>setSyncing(false));
+    }
+  },[fbReady,currentUser]);
+
+  const updateData=useCallback((newData,newCats)=>{
+    const nc=newCats||cats;
+    setData(newData);
+    if(newCats)setCats(newCats);
+    saveData(newData,nc);
+  },[cats,saveData]);
+
+  const updateMonth=useCallback(m=>{
+    let newCats=cats;
+    let clean=m;
+    if(m._catsUpdate){newCats=m._catsUpdate;const{_catsUpdate,...rest}=m;clean=rest;}
+    const newMonths=data.months.map(mo=>mo.id===clean.id?clean:mo);
+    const newData={...data,months:newMonths};
+    updateData(newData,newCats);
+    setSel(clean);
+  },[data,cats,updateData]);
+
+  const addMonth=()=>{
+    const last=data.months[data.months.length-1];
+    const lastLeft=last?((last.totalIncome||0)+(last.carryover||0)-Object.values(last.expenses).reduce((a,b)=>a+b,0)):0;
+    const carry=Math.max(0,Math.round(lastLeft));
+    const id=Date.now();
+    const nm={id,name:`חודש ${data.months.length+1}`,totalIncome:0,carryover:carry,
+      budgets:mkBudgets(cats,0,carry),expenses:mkExp(cats),items:[]};
+    updateData({...data,months:[...data.months,nm]},cats);
+  };
+
+  const handleFbSave=async(cfg)=>{
+    localStorage.setItem("fb_cfg",JSON.stringify(cfg));
+    const ok=await initFirebase(cfg);
+    setFbReady(ok);
+    setPhase("app");
+  };
+
+  if(phase==="login") return<LoginScreen onLogin={id=>{setCurrentUser(id);setPhase("app");}}/>;
+  if(phase==="fbsetup") return<FirebaseSetup onSave={handleFbSave} onSkip={()=>setPhase("app")}/>;
+
+  const cu=USERS.find(u=>u.id===currentUser)||USERS[0];
+  const NAVS=[{key:"months",icon:"📅",label:"חודשים"},{key:"assets",icon:"💎",label:"נכסים"},{key:"stats",icon:"📊",label:"סטטיסטיקה"}];
+
+  return(
+    <div style={{background:"#080f1a",color:"#e2e8f0",height:"100%",display:"flex",flexDirection:"column",fontFamily:"'Heebo',Arial,sans-serif",maxWidth:480,margin:"0 auto",position:"relative"}}>
+
+      {/* Top Bar */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 16px 6px",flexShrink:0}}>
+        <div>
+          <div style={{fontSize:10,opacity:.4,marginBottom:1}}>תקציב משפחתי</div>
+          <div style={{fontSize:19,fontWeight:900}}>המשפחה שלי 👨‍👩‍👧</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {/* sync status */}
+          {syncing&&<span className="spin" style={{fontSize:14,opacity:.6}}>🔄</span>}
+          {!syncing&&fbReady&&<span style={{fontSize:11,opacity:.5,color:"#6ee7b7"}}>🟢 מסונכרן</span>}
+          {!fbReady&&<button onClick={()=>setPhase("fbsetup")} style={{fontSize:10,padding:"4px 8px",borderRadius:8,background:"rgba(252,211,77,0.12)",color:"#fcd34d",border:"1px solid rgba(252,211,77,0.25)",cursor:"pointer",fontFamily:"Heebo,Arial,sans-serif"}}>🔥 חבר Firebase</button>}
+          {/* saved */}
+          <div style={{fontSize:11,padding:"3px 9px",borderRadius:99,transition:"opacity .4s",opacity:saved?1:0,background:"rgba(16,185,129,0.1)",color:"#6ee7b7",border:"1px solid rgba(16,185,129,0.2)"}}>✓</div>
+          {/* current user */}
+          <button onClick={()=>{setSel(null);setNav("months");setPhase("login");}}
+            style={{padding:"4px 10px",borderRadius:10,background:`${cu.color}15`,border:`1px solid ${cu.color}30`,color:cu.color,cursor:"pointer",fontSize:11,fontFamily:"Heebo,Arial,sans-serif"}}>
+            {cu.id==="user1"?"👨":"👩"} {cu.name}
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{flex:1,overflow:"hidden",padding:"0 16px",display:"flex",flexDirection:"column",paddingBottom:68}}>
+        {nav==="months"&&!sel&&(
+          <div style={{overflowY:"auto",flex:1,display:"flex",flexDirection:"column",gap:9,paddingTop:4,paddingBottom:6}} className="fi">
+            {data.months.map(month=>{
+              const ts=Object.values(month.expenses).reduce((a,b)=>a+b,0);
+              const base2=(month.totalIncome||0)+(month.carryover||0);
+              const p=base2>0?Math.min((ts/base2)*100,100):0;
+              const left=base2-ts;
+              return(
+                <div key={month.id} onClick={()=>setSel(month)}
+                  style={{borderRadius:20,padding:15,cursor:"pointer",background:"linear-gradient(135deg,#1e293b,#0f1f35)",border:"1px solid rgba(255,255,255,0.07)",boxShadow:"0 4px 18px rgba(0,0,0,0.3)",transition:"transform .15s",userSelect:"none"}}
+                  onTouchStart={e=>e.currentTarget.style.transform="scale(0.97)"}
+                  onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
+                    <div>
+                      <div style={{fontSize:15,fontWeight:700}}>{month.name}</div>
+                      <div style={{fontSize:10,opacity:.4,marginTop:1}}>
+                        {fmt(month.totalIncome)}
+                        {(month.carryover||0)>0&&<span style={{color:"#fcd34d"}}> +{fmt(month.carryover)}</span>}
+                      </div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:5}}>
+                      <div style={{textAlign:"left"}}>
+                        <div style={{fontSize:14,fontWeight:700,color:left>=0?"#6ee7b7":"#f87171"}}>{fmt(left)}</div>
+                        <div style={{fontSize:9,opacity:.35}}>נותר</div>
+                      </div>
+                      <span style={{opacity:.2,fontSize:13}}>←</span>
+                    </div>
+                  </div>
+                  <div style={{height:4,borderRadius:99,background:"rgba(255,255,255,0.07)",overflow:"hidden"}}>
+                    <div style={{height:"100%",borderRadius:99,width:`${p}%`,transition:"width .7s",background:p>90?"linear-gradient(90deg,#f59e0b,#ef4444)":"linear-gradient(90deg,#6366f1,#8b5cf6)"}}/>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:9,opacity:.3,marginTop:4}}>
+                    <span>{month.items?.length||0} הוצאות · יצא {fmt(ts)}</span>
+                    <span>{Math.round(p)}%</span>
+                  </div>
+                  <button onClick={e=>{e.stopPropagation();updateData({...data,months:data.months.filter(m=>m.id!==month.id)},cats);}} style={{marginTop:6,fontSize:10,color:"rgba(248,113,113,0.4)",background:"none",border:"none",cursor:"pointer",fontFamily:"Heebo,Arial,sans-serif"}}>🗑 מחק</button>
+                </div>
+              );
+            })}
+            <button onClick={addMonth} style={{padding:"16px 0",borderRadius:18,border:"2px dashed rgba(99,102,241,0.26)",background:"rgba(99,102,241,0.05)",color:"#a5b4fc",fontSize:13,cursor:"pointer",fontFamily:"Heebo,Arial,sans-serif"}}>
+              + הוסף חודש חדש
+            </button>
+          </div>
+        )}
+        {nav==="months"&&sel&&(
+          <MonthDetail month={data.months.find(m=>m.id===sel.id)||sel} cats={cats} currentUser={currentUser} onUpdate={updateMonth} onBack={()=>setSel(null)}/>
+        )}
+        {nav==="assets"&&<AssetsView assets={data.assets} onUpdate={a=>updateData({...data,assets:a},cats)}/>}
+        {nav==="stats"&&<StatsView data={data} cats={cats}/>}
+      </div>
+
+      {/* Bottom Nav */}
+      <div style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,display:"flex",justifyContent:"space-around",padding:"8px 8px max(12px,env(safe-area-inset-bottom))",background:"rgba(8,15,26,0.96)",backdropFilter:"blur(20px)",borderTop:"1px solid rgba(255,255,255,0.07)",zIndex:100}}>
+        {NAVS.map(n=>(
+          <button key={n.key} onClick={()=>{setNav(n.key);setSel(null);}} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:1,flex:1,background:"none",border:"none",cursor:"pointer",color:nav===n.key?"#a5b4fc":"rgba(255,255,255,0.28)",transition:"all .2s",fontFamily:"Heebo,Arial,sans-serif"}}>
+            <span style={{fontSize:20}}>{n.icon}</span>
+            <span style={{fontSize:10,fontWeight:nav===n.key?700:400}}>{n.label}</span>
+            {nav===n.key&&<div style={{width:3,height:3,borderRadius:99,background:"#6366f1"}}/>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
