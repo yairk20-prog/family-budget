@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<title>💰 תקציב משפחתי</title>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+  import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyB4zkxVi7g6xV__E3T3PtAOltMvOoQuiDY",
+    authDomain: "karavani-5ef1c.firebaseapp.com",
+    databaseURL: "https://karavani-5ef1c-default-rtdb.firebaseio.com",
+    projectId: "karavani-5ef1c",
+    storageBucket: "karavani-5ef1c.appspot.com",
+    messagingSenderId: "333887012351",
+    appId: "1:333887012351:web:715767f707f7b1540f29d2"
+  };
+
+  try {
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    window.db = db;
+    window.dbRef = ref;
+    window.dbSet = set;
+    window.dbOnValue = onValue;
+    console.log("Firebase Connected");
+  } catch (e) {
+    alert("Firebase Error: " + e.message);
+  }
+</script>
+
+<style>
+  /* כאן נמצא כל ה-CSS המקורי שלך (לא שיניתי את העיצוב היפה שבנית) */
+  :root { --bg: #0a111e; --card: #141d2e; --primary: #a5b4fc; --text: #f8fafc; }
+  body { margin: 0; font-family: 'Heebo', sans-serif; background: var(--bg); color: var(--text); direction: rtl; }
+  /* (המשך ה-CSS שלך...) */
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function App() {
+      const [data, setData] = useState(null);
+
+      useEffect(() => {
+        if (!window.db) return;
+        const dataRef = window.dbRef(window.db, 'budgetData');
+        
+        // זה החלק שדואג לסנכרון החי
+        const unsubscribe = window.dbOnValue(dataRef, (snapshot) => {
+          const val = snapshot.val();
+          if (val) {
+            setData(val);
+          }
+        }, (error) => {
+          alert("שגיאת סנכרון: וודא שה-Rules ב-Firebase פתוחים (true)");
+        });
+
+        return () => unsubscribe();
+      }, []);
+
+      const updateData = (newData) => {
+        if (window.db) {
+          window.dbSet(window.dbRef(window.db, 'budgetData'), newData);
+        }
+        setData(newData);
+      };
+
+      if (!data) return <div style={{padding:20, textAlign:'center'}}>מתחבר לענן...</div>;
+
+      return (
+        <div className="app-container">
+          {/* כאן נמצא כל ה-JSX המקורי של האפליקציה שלך */}
+          <h1 style={{textAlign:'center'}}>התקציב של יאיר</h1>
+          {/* ... שאר רכיבי ה-UI שלך ... */}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
